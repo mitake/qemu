@@ -335,6 +335,10 @@ static void curses_keyboard_setup(void)
 void curses_display_init(DisplayState *ds, int full_screen)
 {
     DisplayChangeListener *dcl;
+
+    if (is_daemonized())
+        return;
+
 #ifndef _WIN32
     if (!isatty(1)) {
         fprintf(stderr, "We need a terminal output\n");

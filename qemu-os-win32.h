@@ -86,4 +86,9 @@ typedef struct {
 } qemu_timeval;
 int qemu_gettimeofday(qemu_timeval *tp);
 
+static inline int is_daemonized(void)
+{
+    return 0;
+}
+
 #endif
