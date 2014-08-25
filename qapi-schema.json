@@ -3481,3 +3481,17 @@
 # Since: 2.1
 ##
 { 'command': 'rtc-reset-reinjection' }
+
+##
+# @blockdebug-set-rules
+#
+# Set rules of blkdebug for the given block device.
+#
+# @device: device ID of target block device
+# @rules: rules for setting, list of dictionary
+#
+# Since: 2.2
+##
+{ 'command': 'blkdebug-set-rules',
+  'data': { 'device': 'str', 'rules': [ 'dict' ] },
+  'gen': 'no'}

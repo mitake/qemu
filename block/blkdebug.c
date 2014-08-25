@@ -687,6 +687,205 @@ static int64_t blkdebug_getlength(BlockDriverState *bs)
     return bdrv_getlength(bs->file);
 }
 
+struct qmp_rules_list_iter {
+    bool failed;
+    QemuOpts *set_state, *inject_error;
+
+    Error *err;
+};
+
+static void rules_list_iter(QObject *obj, void *opaque)
+{
+    struct qmp_rules_list_iter *iter = (struct qmp_rules_list_iter *)opaque;
+    QemuOpts *new_opts;
+    QDict *dict;
+    Error *err;
+    const char *type;
+
+    const char *event_name;
+    int state;
+
+    if (iter->failed) {
+        /* do nothing anymore */
+        return;
+    }
+
+    dict = qobject_to_qdict(obj);
+    if (!dict) {
+        error_set(&iter->err, QERR_INVALID_PARAMETER_TYPE,
+                  "member of rules", "dict");
+        goto fail;
+    }
+
+    event_name = qdict_get_str(dict, "event");
+    if (!event_name) {
+        error_set(&iter->err, QERR_MISSING_PARAMETER, "event");
+        goto fail;
+    }
+
+    state = qdict_get_try_int(dict, "state", 0);
+
+    type = qdict_get_str(dict, "type");
+    if (!strcmp(type, "set-state")) {
+        int new_state;
+
+        if (iter->set_state) {
+            error_setg(&iter->err, "duplicate entry for set-state");
+            goto fail;
+        }
+
+        new_opts = qemu_opts_create(&set_state_opts, NULL, 0, &err);
+        if (!new_opts) {
+            iter->err = err;
+            goto fail;
+        }
+
+        iter->set_state = new_opts;
+
+        new_state = qdict_get_try_int(dict, "new_state", 0);
+        if (qemu_opt_set_number(new_opts, "new_state", new_state) < 0) {
+            error_setg(&iter->err, "faild to set new_state");
+            goto fail;
+        }
+    } else if (!strcmp(type, "inject-error")) {
+        int _errno, sector;
+        bool once, immediately;
+
+        if (iter->inject_error) {
+            error_setg(&iter->err, "duplicate entry for inject-error");
+            goto fail;
+        }
+
+        new_opts = qemu_opts_create(&inject_error_opts, NULL, 0, &err);
+        if (!new_opts) {
+            iter->err = err;
+            goto fail;
+        }
+
+        iter->inject_error = new_opts;
+
+        _errno = qdict_get_try_int(dict, "errno", EIO);
+        if (qemu_opt_set_number(new_opts, "errno", _errno) < 0) {
+            error_setg(&iter->err, "faild to set errno");
+            goto fail;
+        }
+
+        sector = qdict_get_try_int(dict, "sector", -1);
+        if (qemu_opt_set_number(new_opts, "sector", sector) < 0) {
+            error_setg(&iter->err, "faild to set sector");
+            goto fail;
+        }
+
+        once = qdict_get_try_bool(dict, "once", 0);
+        if (qemu_opt_set_bool(new_opts, "once", once) < 0) {
+            error_setg(&iter->err, "faild to set once");
+            goto fail;
+        }
+
+        immediately = qdict_get_try_bool(dict, "immediately", 0);
+        if (qemu_opt_set_bool(new_opts, "immediately", immediately) < 0) {
+            error_setg(&iter->err, "faild to set immediately");
+            goto fail;
+        }
+    } else {
+        error_setg(&iter->err, "unknown type of rule: %s", type);
+        goto fail;
+    }
+
+    if (qemu_opt_set_number(new_opts, "state", state) < 0) {
+        error_setg(&iter->err, "faild to set state");
+        goto fail;
+    }
+
+    if (qemu_opt_set(new_opts, "event", event_name) < 0) {
+        error_setg(&iter->err, "faild to set event");
+        goto fail;
+    }
+
+    return;
+
+fail:
+    iter->failed = true;
+}
+
+int qmp_blkdebug_set_rules(Monitor *mon, const QDict *qdict, QObject **ret)
+{
+    const char *device = qdict_get_str(qdict, "device");
+    QObject *rules = qdict_get(qdict, "rules");
+    const QList *rules_list = NULL;
+    Error *local_err = NULL;
+    BlockDriverState *bs;
+    BDRVBlkdebugState *s;
+    struct qmp_rules_list_iter iter;
+    struct add_rule_data d;
+
+    if (!device) {
+        error_set(&local_err, QERR_MISSING_PARAMETER, "device");
+        goto out;
+    }
+
+    bs = bdrv_find(device);
+    if (!bs) {
+        error_set(&local_err, QERR_DEVICE_NOT_FOUND, device);
+        goto out;
+    }
+
+    bs = bs->file;
+    if (strcmp(bs->drv->format_name, "blkdebug")) {
+        error_setg(&local_err, "BlockDriver (%s) isn't blkdebug",
+                   bs->drv->format_name);
+        goto out;
+    }
+    s = bs->opaque;
+
+    if (!rules) {
+        error_set(&local_err, QERR_MISSING_PARAMETER, "rules");
+        goto out;
+    }
+
+    rules_list = qobject_to_qlist(rules);
+    if (!rules_list) {
+        error_set(&local_err, QERR_INVALID_PARAMETER_TYPE, "rules", "list");
+        goto out;
+    }
+
+    memset(&iter, 0, sizeof(iter));
+    qlist_iter(rules_list, rules_list_iter, &iter);
+    if (iter.failed) {
+        local_err = iter.err;
+        goto out;
+    }
+
+    d.s = s;
+    s->state = 1;
+    if (iter.inject_error) {
+        d.action = ACTION_INJECT_ERROR;
+        add_rule(iter.inject_error, &d);
+    }
+
+    if (iter.set_state) {
+        d.action = ACTION_SET_STATE;
+        add_rule(iter.set_state, &d);
+    }
+
+out:
+    if (iter.inject_error) {
+        qemu_opts_del(iter.inject_error);
+    }
+
+    if (iter.set_state) {
+        qemu_opts_del(iter.set_state);
+    }
+
+    if (local_err) {
+        qerror_report_err(local_err);
+        error_free(local_err);
+        return -1;
+    }
+
+    return 0;
+}
+
 static BlockDriver bdrv_blkdebug = {
     .format_name            = "blkdebug",
     .protocol_name          = "blkdebug",

@@ -588,4 +588,6 @@ void bdrv_io_plug(BlockDriverState *bs);
 void bdrv_io_unplug(BlockDriverState *bs);
 void bdrv_flush_io_queue(BlockDriverState *bs);
 
+int qmp_blkdebug_set_rules(Monitor *mon, const QDict *qdict, QObject **ret);
+
 #endif

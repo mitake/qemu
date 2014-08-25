@@ -3755,3 +3755,21 @@ Example:
 <- { "return": {} }
 
 EQMP
+    {
+        .name       = "blkdebug-set-rules",
+        .args_type  = "device:s,rules:q",
+        .mhandler.cmd_new = qmp_blkdebug_set_rules,
+    },
+SQMP
+blkdebug-set-rules
+------------------
+
+Set blockdebug rules
+
+Example:
+-> {"execute": "blkdebug-set-rules", "arguments": {"device":
+   "ide0-hd0", "rules":[{"event": "write_aio", "type": "inject-error",
+   "immediately": 1, "once": 0, "state": 1}]}}
+<- { "return": {} }
+
+EQMP
